@@ -7,6 +7,7 @@ import json
 import math
 import urllib.parse
 import hashlib
+import pathspec
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -47,6 +48,17 @@ SUPPORTED_EXTS: Dict[str, str] = {
     ".yml": "yaml",
     ".yaml": "yaml",
 }
+
+def load_gitignore_spec(root: Path) -> Optional[pathspec.PathSpec]:
+    gitignore_path = root / ".gitignore"
+    if not gitignore_path.exists():
+        return None
+    try:
+        lines = gitignore_path.read_text().splitlines()
+    except OSError:
+        return None
+    return pathspec.PathSpec.from_lines(pathspec.patterns.GitWildMatchPattern, lines)
+
 
 CHUNK_NODE_TYPES_BY_LANG: Dict[str, Tuple[str, ...]] = {
     "c": ("function_definition", "compound_statement", "for_statement", "while_statement", "if_statement", "switch_statement", "do_statement"),
@@ -157,12 +169,64 @@ def fingerprint_text(norm_text: str) -> str:
     return h
 
 
+def fetch_chunks_from_weaviate(collection: weaviate.WeaviateClient, repo: str) -> List[Chunk]:
+    props = [
+        "chunk_id",
+        "repo",
+        "path",
+        "language",
+        "node_type",
+        "parent_id",
+        "depth",
+        "start_line",
+        "end_line",
+        "start_byte",
+        "end_byte",
+        "token_estimate",
+        "fingerprint",
+        "raw_text",
+        "normalized_text",
+    ]
+    resp = collection.query.fetch_objects(
+        limit=10_000,
+        return_properties=props,
+        filters=Filter.by_property("repo").equal(repo),
+    )
+    objs = getattr(resp, "objects", None) or []
+    results: List[Chunk] = []
+    for obj in objs:
+        p = obj.properties
+        results.append(
+            Chunk(
+                chunk_id=p.get("chunk_id", ""),
+                repo=p.get("repo", ""),
+                path=p.get("path", ""),
+                language=p.get("language", ""),
+                node_type=p.get("node_type", ""),
+                parent_id=p.get("parent_id"),
+                depth=int(p.get("depth", 0) or 0),
+                start_byte=int(p.get("start_byte", 0) or 0),
+                end_byte=int(p.get("end_byte", 0) or 0),
+                start_line=int(p.get("start_line", 0) or 0),
+                end_line=int(p.get("end_line", 0) or 0),
+                raw_text=p.get("raw_text", ""),
+                normalized_text=p.get("normalized_text", ""),
+                token_estimate=int(p.get("token_estimate", 0) or 0),
+                fingerprint=p.get("fingerprint", ""),
+            )
+        )
+    return results
+
 def iter_files(root: Path, max_files: int) -> Iterable[Path]:
+    ignore_spec = load_gitignore_spec(root)
     n = 0
     for p in root.rglob("*"):
         if n >= max_files:
             return
         if not p.is_file():
+            continue
+        rel_path = p.relative_to(root).as_posix()
+        if ignore_spec and ignore_spec.match_file(rel_path):
             continue
         if p.suffix.lower() not in SUPPORTED_EXTS:
             continue
@@ -280,6 +344,7 @@ def ensure_weaviate_schema(client: weaviate.WeaviateClient, vector_dim: int) -> 
             Property(name="token_estimate", data_type=DataType.INT),
             Property(name="fingerprint", data_type=DataType.TEXT),
             Property(name="raw_text", data_type=DataType.TEXT),
+            Property(name="normalized_text", data_type=DataType.TEXT),
         ],
     )
 
@@ -424,14 +489,20 @@ def write_report_html(output_dir: Path, stats: Dict[str, Any]) -> None:
   <meta charset="utf-8"/>
   <title>Code Duplicate Analyzer Report</title>
   <style>
-    body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }}
-    .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }}
-    .card {{ border: 1px solid #ddd; border-radius: 12px; padding: 16px; }}
-    table {{ width: 100%; border-collapse: collapse; }}
-    td, th {{ border-bottom: 1px solid #eee; padding: 6px 8px; }}
-    th {{ text-align: left; }}
-    .muted {{ color: #666; }}
-    code {{ background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }}
+    body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background:#f5f7fb; color:#111827; }}
+    .grid {{ display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }}
+    .card {{ border: 1px solid #dce2ec; background:#ffffff; border-radius: 12px; padding: 16px; box-shadow: 0 8px 22px rgba(17, 24, 39, 0.06); }}
+    table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+    td, th {{ border-bottom: 1px solid #e6ebf2; padding: 6px 8px; }}
+    th {{ text-align: left; color:#0f172a; }}
+    .muted {{ color: #475569; }}
+    code {{ background: #e8ecf4; padding: 2px 6px; border-radius: 6px; color:#0f172a; }}
+    .pathwrap {{ word-break: break-all; white-space: normal; }}
+    .samples {{ table-layout: fixed; }}
+    .samples th:nth-child(1), .samples td:nth-child(1) {{ width: 18%; }}
+    .samples th:nth-child(2), .samples td:nth-child(2) {{ width: 22%; }}
+    .samples th:nth-child(3), .samples td:nth-child(3) {{ width: 60%; }}
+    pre {{ background:#0f172a; color:#e2e8f0; padding:10px; border-radius:8px; max-height:360px; overflow:auto; }}
   </style>
 </head>
 <body>
@@ -491,11 +562,11 @@ def write_report_html(output_dir: Path, stats: Dict[str, Any]) -> None:
       <p class="muted">Showing up to 5 chunks per group with raw code preview (truncated at 800 chars).</p>
       {''.join(
         "<div style='margin-bottom:12px'>"
-        f"<div class='muted'>Fingerprint: <code>{g['fingerprint']}</code> · size {g['count']}</div>"
-        "<table><tr><th>chunk_id</th><th>path:lines</th><th>code preview</th></tr>"
+        f"<div class='muted' style='margin-bottom:6px'>Fingerprint: <code>{g['fingerprint']}</code> · size {g['count']}</div>"
+        "<table class='samples'><tr><th>chunk_id</th><th>path:lines</th><th>code preview</th></tr>"
         + ''.join(
             "<tr><td><code>{cid}</code></td>"
-            "<td><code>{path}:{start}-{end}</code></td>"
+            "<td class='pathwrap'><code>{path}:{start}-{end}</code></td>"
             "<td><pre style='white-space:pre-wrap'>{code}</pre></td></tr>".format(
                 cid=cid,
                 path=html_escape(chunk_samples.get(cid, {}).get("path", "")),
@@ -602,18 +673,12 @@ def main() -> None:
 
             all_chunks.extend(chunks)
 
-        # Write local artifacts first (always)
-        chunks_to_jsonl(output_dir / "chunks.jsonl", all_chunks)
-        stats = write_stats(output_dir, all_chunks, files_scanned=len(files), started_at=started)
-        write_report_html(output_dir, stats)
-
-        # Insert into Weaviate
         if not all_chunks:
             print("No chunks extracted. Done.")
             return
 
         print(f"Upserting {len(all_chunks)} chunks into Weaviate...")
-        BATCH_SIZE = 48
+        BATCH_SIZE = 48  # default batch size; adjust if your GPU/latency needs
 
         if not use_embeddings:
             # Upsert without vectors
@@ -635,9 +700,14 @@ def main() -> None:
                             "token_estimate": c.token_estimate,
                             "fingerprint": c.fingerprint,
                             "raw_text": c.raw_text,
+                            "normalized_text": c.normalized_text,
                         },
                         uuid=c.chunk_id,
                     )
+            stored_chunks = fetch_chunks_from_weaviate(collection, repo)
+            chunks_to_jsonl(output_dir / "chunks.jsonl", stored_chunks)
+            stats = write_stats(output_dir, stored_chunks, files_scanned=len(files), started_at=started)
+            write_report_html(output_dir, stats)
             print("Done (without embeddings).")
             return
 
@@ -664,10 +734,17 @@ def main() -> None:
                             "token_estimate": c.token_estimate,
                             "fingerprint": c.fingerprint,
                             "raw_text": c.raw_text,
+                            "normalized_text": c.normalized_text,
                         },
                         vector=v,
                         uuid=c.chunk_id,
                     )
+
+        # After successful upsert, read back from Weaviate so report reflects stored records
+        stored_chunks = fetch_chunks_from_weaviate(collection, repo)
+        chunks_to_jsonl(output_dir / "chunks.jsonl", stored_chunks)
+        stats = write_stats(output_dir, stored_chunks, files_scanned=len(files), started_at=started)
+        write_report_html(output_dir, stats)
 
         print("Done. See output/report.html and output/stats.json")
     finally:
