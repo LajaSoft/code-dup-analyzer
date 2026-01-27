@@ -22,7 +22,6 @@ docker compose up --build
 
 ## Example output
 - See `examples/output/` for a sample run (generated from a small JS project).
-- Browsing on GitHub? Use the HTML preview helper: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/<owner>/<repo>/main/examples/output/report.html` (replace `<owner>/<repo>` with your repo path).
 
 ## Notes
 - Default Weaviate vectorizer is disabled; we insert vectors ourselves.
