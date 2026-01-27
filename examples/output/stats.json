@@ -1,0 +1,138 @@
+{
+  "files_scanned": 1,
+  "chunks_extracted": 150,
+  "by_language": {
+    "javascript": 150
+  },
+  "by_node_type": {
+    "statement_block": 80,
+    "if_statement": 48,
+    "function_declaration": 15,
+    "try_statement": 4,
+    "for_statement": 2,
+    "while_statement": 1
+  },
+  "token_bins": {
+    "<=50": 66,
+    "51-150": 57,
+    "151-400": 26,
+    "401-1000": 1,
+    ">1000": 0
+  },
+  "exact_duplicate_fingerprint_groups_top": [
+    {
+      "fingerprint": "9c9c81f62e918af80246fd4cb2f7a75d",
+      "count": 3,
+      "chunk_ids": [
+        "a1509be1142a83101bcbf6d624693a6a",
+        "60fb20a2e7de23f1c27cafce108f2291",
+        "0d4f8039ed4f82929faf7a0a022b7d36"
+      ]
+    },
+    {
+      "fingerprint": "18d4039e21a2c8e8489b5a65a7772e99",
+      "count": 2,
+      "chunk_ids": [
+        "8c484ff68522e04c687fdab8113f3426",
+        "73b3bb37ace44d1d4aa92cee2ec63171"
+      ]
+    },
+    {
+      "fingerprint": "9a629cd8789e9322bac7aeb38119c0a0",
+      "count": 2,
+      "chunk_ids": [
+        "9e7cebea91673e23b1b1b409ac60466b",
+        "d2156dbdfac24d5d60d5e7fc55569bef"
+      ]
+    },
+    {
+      "fingerprint": "413d1ee57e1a8f5dfd012aca46640736",
+      "count": 2,
+      "chunk_ids": [
+        "f71fcab1abadd837bf23b78e493f3f16",
+        "a3cb6e647846b57965a615da4a0ef688"
+      ]
+    },
+    {
+      "fingerprint": "6ea470e22c7669b609cb05efab4dcaeb",
+      "count": 2,
+      "chunk_ids": [
+        "a3098da02438aef3416db7b66a8b64f6",
+        "4c4c9c4a6a3432eb73baa1fbd260422a"
+      ]
+    },
+    {
+      "fingerprint": "32854dca440c9b8977d49ad241edcae5",
+      "count": 2,
+      "chunk_ids": [
+        "dcd6123d4456a27db0060230fb37ffe2",
+        "a4c8565f4d45976a22bbce515d6ef924"
+      ]
+    },
+    {
+      "fingerprint": "54fd3d164f7a62e91d24db4400803942",
+      "count": 2,
+      "chunk_ids": [
+        "cce67ce17502cfac388318592faf8c4d",
+        "38fe57b550a63b7dadb7a374bf9f5e7b"
+      ]
+    },
+    {
+      "fingerprint": "97351e4f675ece618f2827b4d8a272a7",
+      "count": 2,
+      "chunk_ids": [
+        "9dddac8a2b9e8af263cc1c5e2ec33aff",
+        "cacaa57b41ecab5dd0fae2e33f1dd5d2"
+      ]
+    },
+    {
+      "fingerprint": "772583cfa8e671b46d50d03aa79e1bb3",
+      "count": 2,
+      "chunk_ids": [
+        "efcb60b79c3207871ef07c4dfe77ef94",
+        "f320fb303b3c638aed746533e7eb85c3"
+      ]
+    },
+    {
+      "fingerprint": "706e7790c39735e20ca11f1bdd7d1a8a",
+      "count": 2,
+      "chunk_ids": [
+        "ce2787cdcb8ab35a73044063b33a3e1a",
+        "01994d19e7b090ac480b675caa16c491"
+      ]
+    },
+    {
+      "fingerprint": "9c2cb73e88b3faa7196d0840097e4fac",
+      "count": 2,
+      "chunk_ids": [
+        "82e7b2bfecaaef163310b30df195ba8e",
+        "f6cf8c7e2ecfd467c4fad727e7c0dfc4"
+      ]
+    },
+    {
+      "fingerprint": "eb5b912bb7169b9e292c0a4dd9199dc9",
+      "count": 2,
+      "chunk_ids": [
+        "435979549fd0b85e1532d4eee4a23f8e",
+        "00025a0607f7a507c0c08976787d7a51"
+      ]
+    },
+    {
+      "fingerprint": "383f06069b519c0227fad4887906172c",
+      "count": 2,
+      "chunk_ids": [
+        "cd2a6efa4d68cc0dcfbe07e6b04b32f4",
+        "d852dd5c2c727968814d61908f803c81"
+      ]
+    },
+    {
+      "fingerprint": "b18dfc7104f23d8100e32e896d9c3ee3",
+      "count": 2,
+      "chunk_ids": [
+        "233406b556b2dad20378656d6992811a",
+        "0e97c5ef90150e75e5a92fc0a77cd182"
+      ]
+    }
+  ],
+  "duration_seconds": 0.265
+}

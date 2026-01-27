@@ -384,6 +384,34 @@ def write_stats(output_dir: Path, chunks: List[Chunk], files_scanned: int, start
 
 
 def write_report_html(output_dir: Path, stats: Dict[str, Any]) -> None:
+    def html_escape(s: str) -> str:
+        return (
+            s.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+
+    # Prepare lookup for top duplicate chunks to display code samples
+    dup_groups = stats.get("exact_duplicate_fingerprint_groups_top", [])[:20]
+    wanted_ids = {cid for g in dup_groups for cid in g.get("chunk_ids", [])[:5]}
+    chunk_samples: Dict[str, Dict[str, Any]] = {}
+    chunks_path = output_dir / "chunks.jsonl"
+    if chunks_path.exists() and wanted_ids:
+        with chunks_path.open("rb") as f:
+            for line in f:
+                obj = orjson.loads(line)
+                cid = obj.get("chunk_id")
+                if cid in wanted_ids:
+                    # keep a short preview to avoid huge HTML
+                    raw = obj.get("raw_text", "")
+                    preview = raw if len(raw) <= 800 else raw[:800] + "\n...[truncated]..."
+                    chunk_samples[cid] = {
+                        "path": obj.get("path", ""),
+                        "start_line": obj.get("start_line"),
+                        "end_line": obj.get("end_line"),
+                        "language": obj.get("language", ""),
+                        "raw_preview": preview,
+                    }
     def row_dict(d: Dict[str, Any]) -> str:
         rows = []
         for k, v in d.items():
@@ -443,9 +471,43 @@ def write_report_html(output_dir: Path, stats: Dict[str, Any]) -> None:
       <h2>Exact-dup candidates (top 20 groups)</h2>
       <p class="muted">Based on fingerprint of normalized text. Full list: <code>candidates_exact_dups.jsonl</code></p>
       <table>
-        <tr><th>Group size</th><th>Fingerprint</th></tr>
-        {''.join([f"<tr><td style='text-align:right'>{g['count']}</td><td><code>{g['fingerprint']}</code></td></tr>" for g in stats["exact_duplicate_fingerprint_groups_top"][:20]])}
+        <tr><th style='text-align:right'>Group size</th><th>Fingerprint</th><th>Chunk IDs (first 5)</th></tr>
+        {''.join(
+            "<tr><td style='text-align:right'>{count}</td>"
+            "<td><code>{fingerprint}</code></td>"
+            "<td><code>{ids}</code></td></tr>".format(
+                count=g["count"],
+                fingerprint=g["fingerprint"],
+                ids=", ".join(g["chunk_ids"][:5]),
+            )
+            for g in stats["exact_duplicate_fingerprint_groups_top"][:20]
+        )}
       </table>
+      <p class="muted">Use <code>chunk_ids</code> to lookup raw code in <code>chunks.jsonl</code> (fields: path, start_line, end_line, raw_text).</p>
+    </div>
+
+    <div class="card">
+      <h2>Duplicate samples (top groups)</h2>
+      <p class="muted">Showing up to 5 chunks per group with raw code preview (truncated at 800 chars).</p>
+      {''.join(
+        "<div style='margin-bottom:12px'>"
+        f"<div class='muted'>Fingerprint: <code>{g['fingerprint']}</code> · size {g['count']}</div>"
+        "<table><tr><th>chunk_id</th><th>path:lines</th><th>code preview</th></tr>"
+        + ''.join(
+            "<tr><td><code>{cid}</code></td>"
+            "<td><code>{path}:{start}-{end}</code></td>"
+            "<td><pre style='white-space:pre-wrap'>{code}</pre></td></tr>".format(
+                cid=cid,
+                path=html_escape(chunk_samples.get(cid, {}).get("path", "")),
+                start=chunk_samples.get(cid, {}).get("start_line", ""),
+                end=chunk_samples.get(cid, {}).get("end_line", ""),
+                code=html_escape(chunk_samples.get(cid, {}).get("raw_preview", "[chunk not found in chunks.jsonl]")),
+            )
+            for cid in g.get("chunk_ids", [])[:5]
+        )
+        + "</table></div>"
+        for g in dup_groups
+      )}
     </div>
   </div>
 
@@ -573,7 +635,8 @@ def main() -> None:
                             "token_estimate": c.token_estimate,
                             "fingerprint": c.fingerprint,
                             "raw_text": c.raw_text,
-                        }
+                        },
+                        uuid=c.chunk_id,
                     )
             print("Done (without embeddings).")
             return
@@ -603,6 +666,7 @@ def main() -> None:
                             "raw_text": c.raw_text,
                         },
                         vector=v,
+                        uuid=c.chunk_id,
                     )
 
         print("Done. See output/report.html and output/stats.json")

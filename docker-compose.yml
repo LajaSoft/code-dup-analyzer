@@ -35,6 +35,8 @@ services:
       - "auto"
       - "--max-model-len"
       - "8192"
+    volumes:
+      - .cache:/root/.cache
     # Uncomment if you want GPU
     # deploy:
     #   resources:

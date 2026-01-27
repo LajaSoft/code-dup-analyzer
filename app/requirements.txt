@@ -1,6 +1,6 @@
 weaviate-client>=4.6.5
 requests>=2.32.0
 tqdm>=4.66.0
-tree_sitter>=0.21.3
-tree_sitter_languages>=1.10.2
+tree_sitter==0.20.2
+tree_sitter_languages==1.10.2
 orjson>=3.10.7
