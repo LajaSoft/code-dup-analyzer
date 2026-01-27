@@ -1,0 +1,69 @@
+version: "3.9"
+
+services:
+  weaviate:
+    image: semitechnologies/weaviate:1.27.5
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      QUERY_DEFAULTS_LIMIT: "50"
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      DEFAULT_VECTORIZER_MODULE: "none"
+      ENABLE_MODULES: ""
+      CLUSTER_HOSTNAME: "node1"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Optional: set in your shell or .env
+      # HF_TOKEN: "hf_..."
+      HF_TOKEN: "${HF_TOKEN:-}"
+    command:
+      - "Octen/Octen-Embedding-4B"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      - "--dtype"
+      - "auto"
+      - "--max-model-len"
+      - "8192"
+    # Uncomment if you want GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - capabilities: [gpu]
+
+  analyzer:
+    build:
+      context: ./app
+    restart: "no"
+    depends_on:
+      - weaviate
+      - vllm
+    environment:
+      INPUT_DIR: "/data/input"
+      OUTPUT_DIR: "/data/output"
+      WEAVIATE_URL: "http://weaviate:8080"
+      VLLM_BASE_URL: "http://vllm:8000/v1"
+      EMBEDDING_MODEL: "Octen/Octen-Embedding-4B"
+      # If embeddings endpoint is down, set to "0" to still produce stats locally.
+      USE_EMBEDDINGS: "1"
+      # Chunking knobs:
+      MIN_CHUNK_CHARS: "120"
+      MAX_CHUNK_CHARS: "12000"
+      MAX_FILES: "20000"
+    volumes:
+      - ./input:/data/input:ro
+      - ./output:/data/output:rw
+
+volumes:
+  weaviate_data:
