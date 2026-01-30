@@ -67,5 +67,56 @@ services:
       - ./input:/data/input:ro
       - ./output:/data/output:rw
 
+  mcp:
+    build:
+      context: ./mcp
+    restart: unless-stopped
+    depends_on:
+      - weaviate
+    ports:
+      - "8090:8090"
+    environment:
+      OUTPUT_DIR: "/data/output"
+      CHUNKS_PATH: "/data/output/chunks.jsonl"
+      DUPS_PATH: "/data/output/candidates_exact_dups.jsonl"
+      MCP_DB_PATH: "/data/output/analysis_progress.sqlite"
+      SESSION_ID: "default"
+      WEAVIATE_URL: "http://weaviate:8080"
+      WEAVIATE_GRPC_HOST: "weaviate"
+      WEAVIATE_GRPC_PORT: "50051"
+      WEAVIATE_GRPC_SECURE: "0"
+      USE_WEAVIATE: "1"
+      WEAVIATE_FETCH_LIMIT: "10000"
+      DEFAULT_MAX_TEXT_LEN: "2000"
+      ALLOW_HUMAN_PRIORITY_UPDATE: "0"
+    volumes:
+      - ./output:/data/output:rw
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - weaviate
+    ports:
+      - "8091:8091"
+    environment:
+      OUTPUT_DIR: "/data/output"
+      CHUNKS_PATH: "/data/output/chunks.jsonl"
+      DUPS_PATH: "/data/output/candidates_exact_dups.jsonl"
+      MCP_DB_PATH: "/data/output/analysis_progress.sqlite"
+      SESSION_ID: "default"
+      WEAVIATE_URL: "http://weaviate:8080"
+      WEAVIATE_GRPC_HOST: "weaviate"
+      WEAVIATE_GRPC_PORT: "50051"
+      WEAVIATE_GRPC_SECURE: "0"
+      USE_WEAVIATE: "1"
+      WEAVIATE_FETCH_LIMIT: "10000"
+      DEFAULT_MAX_TEXT_LEN: "2000"
+      ALLOW_HUMAN_PRIORITY_UPDATE: "0"
+    volumes:
+      - ./output:/data/output:rw
+
 volumes:
   weaviate_data:
