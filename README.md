@@ -61,3 +61,10 @@ Annotation priorities:
 
 ## Web UI
 The web UI runs as a separate service (port 8091) and reuses the same data sources as MCP. It provides a single-page explorer with filters, chunk inspection, duplicate groups, and annotation editing.
+
+Highlights:
+- Status buttons (2do/skip/done) for duplicate groups; sets status for all chunks in a group.
+- Status filter chips (2do/skip/done) to exclude specific statuses from the list.
+- Group details show per‑chunk status pills and stay in sync after Apply or group status changes.
+
+See `web/README.md` for UI-specific notes and API details.

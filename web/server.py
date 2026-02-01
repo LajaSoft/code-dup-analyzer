@@ -88,6 +88,10 @@ def api_stats() -> Dict[str, Any]:
 
 
 def _parse_search_params(q) -> SearchParams:
+    exclude_raw = q.get("exclude_statuses")
+    exclude_statuses = None
+    if exclude_raw:
+        exclude_statuses = tuple(s.strip() for s in exclude_raw.split(",") if s.strip())
     return SearchParams(
         repo=q.get("repo"),
         path_contains=q.get("path_contains"),
@@ -96,6 +100,7 @@ def _parse_search_params(q) -> SearchParams:
         fingerprint=q.get("fingerprint"),
         text_contains=q.get("text_contains"),
         normalized_contains=q.get("normalized_contains"),
+        exclude_statuses=exclude_statuses,
         min_tokens=_int(q.get("min_tokens")),
         max_tokens=_int(q.get("max_tokens")),
         min_lines=_int(q.get("min_lines")),
@@ -200,6 +205,39 @@ async def api_annotations_set(request: Request) -> Dict[str, Any]:
     return set_annotation(params)
 
 
+@app.post("/api/annotations/set_group_status")
+async def api_annotations_set_group_status(request: Request, fingerprint: str) -> Dict[str, Any]:
+    payload = await request.json()
+    status = payload.get("status")
+    if not status:
+        raise HTTPException(status_code=400, detail="status is required")
+    data = get_dup_group(DupGetParams(fingerprint=fingerprint, include_chunks=False, chunk_text_max=0))
+    if not data:
+        raise HTTPException(status_code=404, detail="fingerprint not found")
+    updated = 0
+    for cid in data.get("chunk_ids") or []:
+        set_annotation(AnnotationSetParams(target_type="chunk", target_id=cid, status=status))
+        updated += 1
+    return {"ok": True, "updated": updated, "status": status}
+
+
+@app.post("/api/annotations/bulk_get")
+async def api_annotations_bulk_get(request: Request) -> Dict[str, Any]:
+    payload = await request.json()
+    target_type = payload.get("target_type")
+    target_ids = payload.get("target_ids") or []
+    if not target_type or not isinstance(target_ids, list):
+        raise HTTPException(status_code=400, detail="target_type and target_ids are required")
+    items = []
+    for tid in target_ids:
+        if not tid:
+            continue
+        item = get_annotation(AnnotationGetParams(target_type=target_type, target_id=tid))
+        if item:
+            items.append(item)
+    return {"items": items, "count": len(items)}
+
+
 @app.get("/")
 def index() -> HTMLResponse:
     html = """<!doctype html>
@@ -296,7 +334,58 @@ def index() -> HTMLResponse:
     .list { display: grid; gap: 8px; }
     .dup-item { border: 1px solid #1f2937; border-radius: 10px; padding: 10px; }
     .dup-item:hover { border-color: #334155; }
+    .dup-item.is-open { border-color: #38bdf8; background: #0c152a; }
     .footer-actions { display: flex; gap: 10px; align-items: center; }
+    .dup-actions { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+    .status-actions { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+    .status-btn {
+      border: none;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .status-btn.is-active { box-shadow: 0 0 0 2px rgba(15,23,42,0.4), inset 0 1px 0 rgba(255,255,255,0.2); }
+    .status-btn.is-inactive { opacity: 0.35; }
+    .status-btn.todo { background: #38bdf8; color: #06243d; }
+    .status-btn.skip { background: #64748b; color: #0b1020; }
+    .status-btn.done { background: #22c55e; color: #052a14; }
+    .btn.open-active { box-shadow: 0 0 0 2px rgba(34,211,238,0.6); }
+    .status-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      background: #111827;
+      color: var(--muted);
+    }
+    .status-pill.todo { background: #38bdf8; color: #06243d; }
+    .status-pill.skip { background: #94a3b8; color: #0b1020; }
+    .status-pill.done { background: #22c55e; color: #052a14; }
+    .status-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .toggle-chip { display: inline-flex; align-items: center; cursor: pointer; user-select: none; }
+    .toggle-chip input { display: none; }
+    .toggle-chip span {
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 1px solid #1f2937;
+      background: #0b1224;
+      color: var(--muted);
+      font-size: 11px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 2px 4px rgba(0,0,0,0.35);
+      transition: transform .1s ease, background .15s ease, color .15s ease, border .15s ease;
+    }
+    .toggle-chip input:checked + span {
+      color: #0b1020;
+      border-color: transparent;
+      transform: translateY(1px);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
+    }
+    .toggle-chip.todo input:checked + span { background: #38bdf8; }
+    .toggle-chip.skip input:checked + span { background: #94a3b8; }
+    .toggle-chip.done input:checked + span { background: #22c55e; }
     @media (max-width: 1100px) {
       .grid { grid-template-columns: 1fr; }
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -347,6 +436,14 @@ def index() -> HTMLResponse:
         <div>
           <label>Fingerprint</label>
           <input id=\"fingerprint\" placeholder=\"hash\" />
+        </div>
+        <div>
+          <label>Status</label>
+          <div class=\"status-filters\">
+            <label class=\"toggle-chip todo\"><input id=\"statusTodo\" type=\"checkbox\" checked /><span>2do</span></label>
+            <label class=\"toggle-chip skip\"><input id=\"statusSkip\" type=\"checkbox\" checked /><span>skip</span></label>
+            <label class=\"toggle-chip done\"><input id=\"statusDone\" type=\"checkbox\" checked /><span>done</span></label>
+          </div>
         </div>
         <div>
           <label>Min tokens</label>
@@ -486,6 +583,9 @@ let lastQuery = null;
 let selectedTarget = null;
 let allowHumanPriority = false;
 let lastDupParams = '';
+let currentOpenFingerprint = null;
+let currentGroupChunkIds = [];
+const groupStatus = new Map();
 
 function qs(id){ return document.getElementById(id); }
 function escapeHtml(str){
@@ -509,6 +609,14 @@ function langClass(lang){
   return map[key] || key || 'plaintext';
 }
 
+function getExcludedStatuses(){
+  const excluded = [];
+  if(!qs('statusTodo').checked) excluded.push('todo');
+  if(!qs('statusSkip').checked) excluded.push('skip');
+  if(!qs('statusDone').checked) excluded.push('done');
+  return excluded;
+}
+
 async function fetchJSON(url, options){
   const res = await fetch(url, options);
   if(!res.ok){
@@ -516,6 +624,41 @@ async function fetchJSON(url, options){
     throw new Error(text || res.statusText);
   }
   return await res.json();
+}
+
+async function fetchChunkStatuses(chunkIds){
+  if(!chunkIds?.length){ return {}; }
+  const data = await fetchJSON('/api/annotations/bulk_get', {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({target_type: 'chunk', target_ids: chunkIds}),
+  });
+  const map = {};
+  (data.items || []).forEach(item => {
+    if(item?.target_id){ map[item.target_id] = item.status || ''; }
+  });
+  return map;
+}
+
+async function refreshOpenGroupStatuses(){
+  if(!currentGroupChunkIds.length){ return; }
+  const statusMap = await fetchChunkStatuses(currentGroupChunkIds);
+  const container = qs('groupDetails');
+  container.querySelectorAll('[data-chunk-id]').forEach(item => {
+    const cid = item.dataset.chunkId;
+    const status = statusMap[cid] || '';
+    const pill = item.querySelector('.status-pill');
+    if(pill){
+      pill.textContent = status || '-';
+      pill.className = `status-pill ${status || ''}`.trim();
+    }
+  });
+  if(selectedTarget?.type === 'chunk'){
+    const status = statusMap[selectedTarget.id];
+    if(status !== undefined){
+      qs('annStatus').value = status || '';
+    }
+  }
 }
 
 async function loadStats(){
@@ -566,6 +709,8 @@ function buildFilterParams(){
   for(const [k,v] of Object.entries(fields)){
     if(v !== '' && v !== null && v !== undefined){ params.set(k, v); }
   }
+  const excluded = getExcludedStatuses();
+  if(excluded.length){ params.set('exclude_statuses', excluded.join(',')); }
   return params;
 }
 
@@ -661,35 +806,113 @@ async function loadDupGroups(){
   qs('dupMeta').textContent = `${data.count} групп`;
   const list = qs('dupList');
   list.innerHTML = '';
+  const chunkIds = [];
+  const chunkToGroup = new Map();
   data.items.forEach(item => {
     const div = document.createElement('div');
     div.className = 'dup-item';
+    div.dataset.fp = item.fingerprint;
     div.innerHTML = `
       <div class="mono">${escapeHtml(item.fingerprint)}</div>
       <div class="muted">size: ${item.count}</div>
-      <button class="btn" style="margin-top:6px;">Open</button>
+      <div class="dup-actions">
+        <button class="btn" data-open>Open</button>
+        <div class="status-actions">
+          <button class="status-btn todo" data-status="todo">2do</button>
+          <button class="status-btn skip" data-status="skip">skip</button>
+          <button class="status-btn done" data-status="done">done</button>
+        </div>
+      </div>
     `;
-    div.querySelector('button').onclick = () => openGroup(item.fingerprint);
+    div.querySelector('[data-open]').onclick = () => openGroup(item.fingerprint);
+    div.querySelectorAll('.status-btn').forEach(btn => {
+      btn.onclick = () => setGroupStatus(item.fingerprint, btn.dataset.status);
+    });
+    updateGroupRow(div, groupStatus.get(item.fingerprint) || '', currentOpenFingerprint === item.fingerprint);
     list.appendChild(div);
+    (item.chunk_ids || []).forEach(cid => {
+      if(!cid) return;
+      chunkIds.push(cid);
+      chunkToGroup.set(cid, item.fingerprint);
+    });
+  });
+  if(chunkIds.length){
+    const statusMap = await fetchChunkStatuses(chunkIds);
+    for(const [cid, status] of Object.entries(statusMap)){
+      if(!status) continue;
+      const fp = chunkToGroup.get(cid);
+      if(!fp || groupStatus.has(fp)) continue;
+      groupStatus.set(fp, status);
+      const row = list.querySelector(`[data-fp="${CSS.escape(fp)}"]`);
+      if(row){ updateGroupRow(row, status, currentOpenFingerprint === fp); }
+    }
+  }
+}
+
+function updateGroupRow(div, status, isOpen){
+  div.classList.toggle('is-open', !!isOpen);
+  const openBtn = div.querySelector('[data-open]');
+  if(openBtn){ openBtn.classList.toggle('open-active', !!isOpen); }
+  const buttons = Array.from(div.querySelectorAll('.status-btn'));
+  buttons.forEach(btn => {
+    const isMatch = status && btn.dataset.status === status;
+    btn.classList.toggle('is-active', !!isMatch);
+    btn.classList.toggle('is-inactive', !!status && !isMatch);
   });
 }
 
-async function openGroup(fp){
-  const params = new URLSearchParams(lastDupParams || '');
+async function setGroupStatus(fp, status){
+  if(!fp || !status){ return; }
+  qs('statusLine').textContent = 'Updating group...';
+  const params = new URLSearchParams();
   params.set('fingerprint', fp);
+  await fetchJSON(`/api/annotations/set_group_status?${params.toString()}`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({status}),
+  });
+  groupStatus.set(fp, status);
+  const row = qs('dupList').querySelector(`[data-fp="${CSS.escape(fp)}"]`);
+  if(row){ updateGroupRow(row, status, currentOpenFingerprint === fp); }
+  if(currentOpenFingerprint === fp){
+    qs('groupDetails').querySelectorAll('[data-chunk-id]').forEach(item => {
+      const pill = item.querySelector('.status-pill');
+      if(pill){
+        pill.textContent = status;
+        pill.className = `status-pill ${status}`;
+      }
+    });
+    if(selectedTarget?.type === 'chunk'){
+      qs('annStatus').value = status;
+    }
+  }
+  qs('statusLine').textContent = `group ${fp.slice(0, 8)}… -> ${status}`;
+  setTimeout(() => qs('statusLine').textContent = '', 1600);
+}
+
+async function openGroup(fp){
+  const params = new URLSearchParams();
+  params.set('fingerprint', fp);
+  params.set('include_chunks', 'true');
   params.set('chunk_text_max', 1000);
-  const data = await fetchJSON(`/api/dups/get_filtered?${params.toString()}`);
+  const data = await fetchJSON(`/api/dups/get?${params.toString()}`);
   selectedTarget = {type: 'dup_group', id: fp};
+  currentOpenFingerprint = fp;
+  qs('dupList').querySelectorAll('.dup-item').forEach(div => {
+    updateGroupRow(div, groupStatus.get(div.dataset.fp) || '', div.dataset.fp === fp);
+  });
   qs('groupMeta').textContent = `fingerprint ${fp} · size ${data.count}`;
   await loadAnnotation();
   const container = qs('groupDetails');
   container.innerHTML = '';
+  currentGroupChunkIds = data.chunks.map(c => c.chunk_id);
   data.chunks.forEach(ch => {
     const item = document.createElement('div');
     item.className = 'dup-item';
+    item.dataset.chunkId = ch.chunk_id;
     item.innerHTML = `
       <div class="mono">${escapeHtml(ch.path)}:${ch.start_line}-${ch.end_line}</div>
-      <div class="muted">tokens: ${ch.token_estimate} · dup_count: ${ch.dup_count}</div>
+      <div class="muted">tokens: ${ch.token_estimate} · dup_count: ${ch.dup_count} · <span class="status-pill">?</span></div>
       <pre class="mono" style="white-space:pre-wrap; background:#0b1224; color:#e2e8f0; padding:8px; border-radius:8px;"><code class="language-plaintext"></code></pre>
       <button class="btn ghost">Inspect chunk</button>
     `;
@@ -702,17 +925,34 @@ async function openGroup(fp){
     item.querySelector('button').onclick = () => selectChunk(ch.chunk_id, ch);
     container.appendChild(item);
   });
+  const statusMap = await fetchChunkStatuses(currentGroupChunkIds);
+  container.querySelectorAll('[data-chunk-id]').forEach(item => {
+    const cid = item.dataset.chunkId;
+    const status = statusMap[cid] || '';
+    const pill = item.querySelector('.status-pill');
+    if(pill){
+      pill.textContent = status || '-';
+      pill.className = `status-pill ${status || ''}`.trim();
+    }
+  });
+  if(data.chunks.length){
+    await selectChunk(data.chunks[0].chunk_id, data.chunks[0]);
+  }
 }
 
-qs('applyFilters').onclick = () => {
-  loadChunks(true);
-  loadDupGroups();
+qs('applyFilters').onclick = async () => {
+  await loadChunks(true);
+  await loadDupGroups();
+  await refreshOpenGroupStatuses();
 };
 qs('resetFilters').onclick = () => {
   ['pathContains','nodeType','textContains','normContains','fingerprint','minTokens','maxTokens','minLines','maxLines','minDup','maxDup'].forEach(id => qs(id).value = '');
   qs('languageSelect').value = '';
   qs('sortBy').value = '';
   qs('sortOrder').value = 'desc';
+  qs('statusTodo').checked = true;
+  qs('statusSkip').checked = true;
+  qs('statusDone').checked = true;
   loadChunks(true);
 };
 qs('loadMore').onclick = () => loadChunks(false);

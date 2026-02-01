@@ -58,6 +58,7 @@ class SearchParams:
     fingerprint: Optional[str] = None
     text_contains: Optional[str] = None
     normalized_contains: Optional[str] = None
+    exclude_statuses: Optional[Tuple[str, ...]] = None
     min_tokens: Optional[int] = None
     max_tokens: Optional[int] = None
     min_lines: Optional[int] = None
@@ -266,6 +267,23 @@ def list_annotations(args: AnnotationListParams) -> Dict[str, Any]:
     return {"items": items, "count": len(items)}
 
 
+def _load_status_map(exclude_statuses: Optional[Iterable[str]], target_type: str = "chunk") -> Dict[str, str]:
+    if not exclude_statuses:
+        return {}
+    statuses = [s for s in exclude_statuses if s]
+    if not statuses:
+        return {}
+    placeholders = ",".join("?" for _ in statuses)
+    q = (
+        "SELECT target_id, status FROM annotations "
+        f"WHERE session_id=? AND target_type=? AND status IN ({placeholders})"
+    )
+    params: List[Any] = [SESSION_ID, target_type, *statuses]
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(q, params).fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
 # --- Weaviate connector (optional) ---
 
 class WeaviateSource:
@@ -404,7 +422,12 @@ def _chunk_summary(obj: Dict[str, Any], dup_map: Dict[str, int]) -> ChunkSummary
     )
 
 
-def _matches_search(obj: Dict[str, Any], args: SearchParams, dup_map: Dict[str, int]) -> bool:
+def _matches_search(
+    obj: Dict[str, Any],
+    args: SearchParams,
+    dup_map: Dict[str, int],
+    status_map: Optional[Dict[str, str]] = None,
+) -> bool:
     if args.repo and obj.get("repo") != args.repo:
         return False
     if args.path_contains and args.path_contains not in (obj.get("path") or ""):
@@ -442,6 +465,10 @@ def _matches_search(obj: Dict[str, Any], args: SearchParams, dup_map: Dict[str, 
         fp = obj.get("fingerprint", "")
         if dup_map.get(fp, 1) > args.max_dup_count:
             return False
+    if status_map:
+        chunk_id = obj.get("chunk_id", "")
+        if chunk_id and chunk_id in status_map:
+            return False
     return True
 
 
@@ -468,11 +495,12 @@ def _find_chunk_by_id(chunk_id: str) -> Optional[Dict[str, Any]]:
 def search_chunks(args: SearchParams) -> Dict[str, Any]:
     items: List[Dict[str, Any]] = []
     dup_map = dup_counts()
+    status_map = _load_status_map(args.exclude_statuses, "chunk")
 
     if args.sort_by:
         all_items: List[ChunkSummary] = []
         for obj in _iter_chunks(args.repo):
-            if not _matches_search(obj, args, dup_map):
+            if not _matches_search(obj, args, dup_map, status_map):
                 continue
             all_items.append(_chunk_summary(obj, dup_map))
         key = args.sort_by
@@ -493,7 +521,7 @@ def search_chunks(args: SearchParams) -> Dict[str, Any]:
 
     skipped = 0
     for obj in _iter_chunks(args.repo):
-        if not _matches_search(obj, args, dup_map):
+        if not _matches_search(obj, args, dup_map, status_map):
             continue
         if skipped < args.offset:
             skipped += 1
@@ -582,16 +610,22 @@ def _base_group_search(args: SearchParams) -> SearchParams:
 
 def list_dup_groups_filtered(args: SearchParams, min_count: int = 2, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
     counts: Dict[str, int] = {}
+    sample_ids: Dict[str, List[str]] = {}
     base = _base_group_search(args)
+    status_map = _load_status_map(base.exclude_statuses, "chunk")
     for obj in _iter_chunks(base.repo):
-        if not _matches_search(obj, base, dup_counts()):
+        if not _matches_search(obj, base, dup_counts(), status_map):
             continue
         fp = obj.get("fingerprint")
         if not fp:
             continue
         counts[fp] = counts.get(fp, 0) + 1
+        if len(sample_ids.get(fp, [])) < 5:
+            cid = obj.get("chunk_id")
+            if cid:
+                sample_ids.setdefault(fp, []).append(cid)
     items = [
-        {"fingerprint": fp, "count": cnt}
+        {"fingerprint": fp, "count": cnt, "chunk_ids": sample_ids.get(fp, [])}
         for fp, cnt in counts.items()
         if cnt >= min_count
     ]
@@ -602,13 +636,14 @@ def list_dup_groups_filtered(args: SearchParams, min_count: int = 2, limit: int 
 
 def get_dup_group_filtered(args: DupGetParams, search: SearchParams) -> Optional[Dict[str, Any]]:
     base = _base_group_search(search)
+    status_map = _load_status_map(base.exclude_statuses, "chunk")
     fp = args.fingerprint
     chunks: List[Dict[str, Any]] = []
     count = 0
     for obj in _iter_chunks(base.repo):
         if obj.get("fingerprint") != fp:
             continue
-        if not _matches_search(obj, base, dup_counts()):
+        if not _matches_search(obj, base, dup_counts(), status_map):
             continue
         count += 1
         chunks.append(
