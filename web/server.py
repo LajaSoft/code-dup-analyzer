@@ -386,6 +386,7 @@ def index() -> HTMLResponse:
     .toggle-chip.todo input:checked + span { background: #38bdf8; }
     .toggle-chip.skip input:checked + span { background: #94a3b8; }
     .toggle-chip.done input:checked + span { background: #22c55e; }
+    .toggle-chip.new input:checked + span { background: #fbbf24; }
     @media (max-width: 1100px) {
       .grid { grid-template-columns: 1fr; }
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -440,6 +441,7 @@ def index() -> HTMLResponse:
         <div>
           <label>Status</label>
           <div class=\"status-filters\">
+            <label class=\"toggle-chip new\"><input id=\"statusNew\" type=\"checkbox\" checked /><span>new</span></label>
             <label class=\"toggle-chip todo\"><input id=\"statusTodo\" type=\"checkbox\" checked /><span>2do</span></label>
             <label class=\"toggle-chip skip\"><input id=\"statusSkip\" type=\"checkbox\" checked /><span>skip</span></label>
             <label class=\"toggle-chip done\"><input id=\"statusDone\" type=\"checkbox\" checked /><span>done</span></label>
@@ -611,6 +613,7 @@ function langClass(lang){
 
 function getExcludedStatuses(){
   const excluded = [];
+  if(!qs('statusNew').checked) excluded.push('new');
   if(!qs('statusTodo').checked) excluded.push('todo');
   if(!qs('statusSkip').checked) excluded.push('skip');
   if(!qs('statusDone').checked) excluded.push('done');
@@ -950,6 +953,7 @@ qs('resetFilters').onclick = () => {
   qs('languageSelect').value = '';
   qs('sortBy').value = '';
   qs('sortOrder').value = 'desc';
+  qs('statusNew').checked = true;
   qs('statusTodo').checked = true;
   qs('statusSkip').checked = true;
   qs('statusDone').checked = true;

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import orjson
 from fastapi import FastAPI, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from core import (
     DEFAULT_MAX_TEXT_LEN,
@@ -98,7 +98,7 @@ class GetDupGroupArgs(BaseModel):
 
 
 class SetAnnotationArgs(BaseModel):
-    target_type: str
+    target_type: Literal["chunk", "dup_group"]
     target_id: str
     status: Optional[str] = None
     priority: Optional[int] = None
@@ -106,17 +106,38 @@ class SetAnnotationArgs(BaseModel):
     human_priority: Optional[int] = None
     comment: Optional[str] = None
 
+    @field_validator("target_type", mode="before")
+    @classmethod
+    def _normalize_target_type(cls, v: Any) -> Any:
+        if v == "duplicate_group":
+            return "dup_group"
+        return v
+
 
 class GetAnnotationArgs(BaseModel):
-    target_type: str
+    target_type: Literal["chunk", "dup_group"]
     target_id: str
+
+    @field_validator("target_type", mode="before")
+    @classmethod
+    def _normalize_target_type(cls, v: Any) -> Any:
+        if v == "duplicate_group":
+            return "dup_group"
+        return v
 
 
 class ListAnnotationsArgs(BaseModel):
-    target_type: Optional[str] = None
+    target_type: Optional[Literal["chunk", "dup_group"]] = None
     status: Optional[str] = None
     limit: int = 100
     offset: int = 0
+
+    @field_validator("target_type", mode="before")
+    @classmethod
+    def _normalize_target_type(cls, v: Any) -> Any:
+        if v == "duplicate_group":
+            return "dup_group"
+        return v
 
 
 @asynccontextmanager
@@ -313,7 +334,16 @@ async def mcp_jsonrpc(req: Request) -> Any:
             if not name:
                 return _rpc_error(request.id, -32602, "Missing tool name")
             data = call_tool(ToolCall(name=name, arguments=arguments))
-            resp = _rpc_result(request.id, data)
+            payload = data
+            # MCP clients typically read only `content`, so mirror `data` there.
+            if isinstance(data, dict) and "data" in data:
+                mirrored = orjson.dumps(data["data"]).decode("utf-8")
+                payload = {
+                    **data,
+                    "content": list(data.get("content") or [])
+                    + [{"type": "text", "text": mirrored}],
+                }
+            resp = _rpc_result(request.id, payload)
             print(f"[mcp] response: {resp}")
             return resp
         if method == "ping":
