@@ -129,6 +129,7 @@ class GetAnnotationArgs(BaseModel):
 class ListAnnotationsArgs(BaseModel):
     target_type: Optional[Literal["chunk", "dup_group"]] = None
     status: Optional[str] = None
+    has_comment: Optional[bool] = None
     limit: int = 100
     offset: int = 0
 

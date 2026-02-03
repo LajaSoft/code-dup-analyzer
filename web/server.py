@@ -351,6 +351,30 @@ def index() -> HTMLResponse:
     .status-btn.todo { background: #38bdf8; color: #06243d; }
     .status-btn.skip { background: #64748b; color: #0b1020; }
     .status-btn.done { background: #22c55e; color: #052a14; }
+    .status-btn.comment { background: #fbbf24; color: #3a2a08; }
+    .group-comment {
+      margin-top: 8px;
+      background: #0b1224;
+      border: 1px solid #1f2937;
+      border-radius: 10px;
+      padding: 10px;
+    }
+    .group-comment textarea {
+      width: 100%;
+      min-height: 70px;
+      background: #0f172a;
+      color: var(--ink);
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      padding: 8px;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 12px;
+    }
+    .group-comment .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
     .btn.open-active { box-shadow: 0 0 0 2px rgba(34,211,238,0.6); }
     .status-pill {
       display: inline-block;
@@ -824,13 +848,23 @@ async function loadDupGroups(){
           <button class="status-btn todo" data-status="todo">2do</button>
           <button class="status-btn skip" data-status="skip">skip</button>
           <button class="status-btn done" data-status="done">done</button>
+          <button class="status-btn comment" data-comment>comment</button>
+        </div>
+      </div>
+      <div class="group-comment" data-comment-editor style="display:none;">
+        <textarea placeholder="comment for this group"></textarea>
+        <div class="actions">
+          <button class="btn" data-comment-save>Ok</button>
+          <button class="btn ghost" data-comment-cancel>Cancel</button>
         </div>
       </div>
     `;
     div.querySelector('[data-open]').onclick = () => openGroup(item.fingerprint);
-    div.querySelectorAll('.status-btn').forEach(btn => {
+    div.querySelectorAll('.status-btn[data-status]').forEach(btn => {
       btn.onclick = () => setGroupStatus(item.fingerprint, btn.dataset.status);
     });
+    const commentBtn = div.querySelector('[data-comment]');
+    if(commentBtn){ commentBtn.onclick = () => toggleGroupComment(item.fingerprint, div); }
     updateGroupRow(div, groupStatus.get(item.fingerprint) || '', currentOpenFingerprint === item.fingerprint);
     list.appendChild(div);
     (item.chunk_ids || []).forEach(cid => {
@@ -856,7 +890,7 @@ function updateGroupRow(div, status, isOpen){
   div.classList.toggle('is-open', !!isOpen);
   const openBtn = div.querySelector('[data-open]');
   if(openBtn){ openBtn.classList.toggle('open-active', !!isOpen); }
-  const buttons = Array.from(div.querySelectorAll('.status-btn'));
+  const buttons = Array.from(div.querySelectorAll('.status-btn[data-status]'));
   buttons.forEach(btn => {
     const isMatch = status && btn.dataset.status === status;
     btn.classList.toggle('is-active', !!isMatch);
@@ -891,6 +925,43 @@ async function setGroupStatus(fp, status){
   }
   qs('statusLine').textContent = `group ${fp.slice(0, 8)}… -> ${status}`;
   setTimeout(() => qs('statusLine').textContent = '', 1600);
+}
+
+async function toggleGroupComment(fp, row){
+  const editor = row.querySelector('[data-comment-editor]');
+  if(!editor){ return; }
+  const isOpen = editor.style.display !== 'none';
+  if(isOpen){
+    editor.style.display = 'none';
+    return;
+  }
+  editor.style.display = 'block';
+  let current = '';
+  try{
+    const data = await fetchJSON(`/api/annotations/get?target_type=dup_group&target_id=${encodeURIComponent(fp)}`);
+    current = data?.comment || '';
+  }catch(_){}
+  const textarea = editor.querySelector('textarea');
+  if(textarea){ textarea.value = current; textarea.focus(); }
+  const saveBtn = editor.querySelector('[data-comment-save]');
+  const cancelBtn = editor.querySelector('[data-comment-cancel]');
+  if(saveBtn){
+    saveBtn.onclick = async () => {
+      const comment = textarea ? textarea.value : '';
+      qs('statusLine').textContent = 'Updating comment...';
+      await fetchJSON('/api/annotations/set', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({target_type: 'dup_group', target_id: fp, comment: comment || null}),
+      });
+      qs('statusLine').textContent = `group ${fp.slice(0, 8)}… comment updated`;
+      setTimeout(() => qs('statusLine').textContent = '', 1600);
+      editor.style.display = 'none';
+    };
+  }
+  if(cancelBtn){
+    cancelBtn.onclick = () => { editor.style.display = 'none'; };
+  }
 }
 
 async function openGroup(fp){

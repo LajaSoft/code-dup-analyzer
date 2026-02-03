@@ -107,6 +107,7 @@ class AnnotationGetParams:
 class AnnotationListParams:
     target_type: Optional[str] = None
     status: Optional[str] = None
+    has_comment: Optional[bool] = None
     limit: int = 100
     offset: int = 0
 
@@ -203,8 +204,11 @@ def _upsert_annotation(
         INSERT INTO annotations (session_id, target_type, target_id, status, human_priority, ai_priority, comment, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id, target_type, target_id)
-        DO UPDATE SET status=excluded.status, human_priority=COALESCE(excluded.human_priority, annotations.human_priority),
-                      ai_priority=excluded.ai_priority, comment=excluded.comment, updated_at=excluded.updated_at
+        DO UPDATE SET status=COALESCE(excluded.status, annotations.status),
+                      human_priority=COALESCE(excluded.human_priority, annotations.human_priority),
+                      ai_priority=COALESCE(excluded.ai_priority, annotations.ai_priority),
+                      comment=COALESCE(excluded.comment, annotations.comment),
+                      updated_at=excluded.updated_at
         """,
         (SESSION_ID, args.target_type, args.target_id, args.status, human_priority, ai_priority, args.comment, now),
     )
@@ -215,18 +219,24 @@ def set_annotation(args: AnnotationSetParams) -> Dict[str, Any]:
     ai_priority = args.ai_priority if args.ai_priority is not None else args.priority
     human_priority = args.human_priority if ALLOW_HUMAN_PRIORITY_UPDATE else None
     with sqlite3.connect(DB_PATH) as conn:
-        _upsert_annotation(conn, args, now, human_priority, ai_priority)
-        if args.target_type == "dup_group" and args.status is not None:
+        if args.target_type == "dup_group":
             group = get_dup_group(DupGetParams(fingerprint=args.target_id, include_chunks=False, chunk_text_max=0))
             if group:
                 for cid in group.get("chunk_ids", []):
                     _upsert_annotation(
                         conn,
-                        AnnotationSetParams(target_type="chunk", target_id=cid, status=args.status),
+                        AnnotationSetParams(
+                            target_type="chunk",
+                            target_id=cid,
+                            status=args.status,
+                            comment=args.comment,
+                        ),
                         now,
                         None,
                         None,
                     )
+        else:
+            _upsert_annotation(conn, args, now, human_priority, ai_priority)
         conn.commit()
     current = get_annotation(AnnotationGetParams(target_type=args.target_type, target_id=args.target_id)) or {}
     return {
@@ -235,7 +245,54 @@ def set_annotation(args: AnnotationSetParams) -> Dict[str, Any]:
     }
 
 
+def _fetch_chunk_rows(chunk_ids: List[str]) -> List[Tuple[str, Optional[str], Optional[str], float]]:
+    if not chunk_ids:
+        return []
+    placeholders = ",".join("?" for _ in chunk_ids)
+    q = (
+        "SELECT target_id, status, comment, updated_at FROM annotations "
+        f"WHERE session_id=? AND target_type='chunk' AND target_id IN ({placeholders})"
+    )
+    params: List[Any] = [SESSION_ID, *chunk_ids]
+    with sqlite3.connect(DB_PATH) as conn:
+        return conn.execute(q, params).fetchall()
+
+
+def _derive_group_annotation(fingerprint: str) -> Optional[Dict[str, Any]]:
+    group = get_dup_group(DupGetParams(fingerprint=fingerprint, include_chunks=False, chunk_text_max=0))
+    if not group:
+        return None
+    chunk_ids = group.get("chunk_ids") or []
+    rows = _fetch_chunk_rows(chunk_ids)
+    if not rows:
+        return None
+    status_counts: Dict[str, int] = {}
+    comment_counts: Dict[str, int] = {}
+    latest = 0.0
+    for _, status, comment, updated_at in rows:
+        if updated_at and updated_at > latest:
+            latest = updated_at
+        if status:
+            status_counts[status] = status_counts.get(status, 0) + 1
+        if comment:
+            comment_counts[comment] = comment_counts.get(comment, 0) + 1
+    status = max(status_counts.items(), key=lambda x: x[1])[0] if status_counts else None
+    comment = max(comment_counts.items(), key=lambda x: x[1])[0] if comment_counts else None
+    return {
+        "session_id": SESSION_ID,
+        "target_type": "dup_group",
+        "target_id": fingerprint,
+        "status": status,
+        "human_priority": None,
+        "ai_priority": None,
+        "comment": comment,
+        "updated_at": latest,
+    }
+
+
 def get_annotation(args: AnnotationGetParams) -> Optional[Dict[str, Any]]:
+    if args.target_type == "dup_group":
+        return _derive_group_annotation(args.target_id)
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
             """
@@ -260,6 +317,32 @@ def get_annotation(args: AnnotationGetParams) -> Optional[Dict[str, Any]]:
 
 
 def list_annotations(args: AnnotationListParams) -> Dict[str, Any]:
+    if args.target_type == "dup_group":
+        items = []
+        skipped = 0
+        for g in _iter_jsonl(DUPS_PATH):
+            fp = g.get("fingerprint")
+            if not fp:
+                continue
+            group = _derive_group_annotation(fp)
+            if not group:
+                continue
+            if args.status:
+                rows = _fetch_chunk_rows(g.get("chunk_ids") or [])
+                if not any(r[1] == args.status for r in rows):
+                    continue
+            if args.has_comment is True and not group.get("comment"):
+                continue
+            if args.has_comment is False and group.get("comment"):
+                continue
+            if skipped < args.offset:
+                skipped += 1
+                continue
+            items.append(group)
+            if len(items) >= args.limit:
+                break
+        return {"items": items, "count": len(items)}
+
     q = "SELECT session_id, target_type, target_id, status, human_priority, ai_priority, comment, updated_at FROM annotations WHERE session_id=?"
     params: List[Any] = [SESSION_ID]
     if args.target_type:
@@ -268,6 +351,10 @@ def list_annotations(args: AnnotationListParams) -> Dict[str, Any]:
     if args.status:
         q += " AND status=?"
         params.append(args.status)
+    if args.has_comment is True:
+        q += " AND comment IS NOT NULL AND comment != ''"
+    if args.has_comment is False:
+        q += " AND (comment IS NULL OR comment = '')"
     q += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
     params.extend([args.limit, args.offset])
     with sqlite3.connect(DB_PATH) as conn:
